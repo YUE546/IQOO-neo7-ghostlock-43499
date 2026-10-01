@@ -29,6 +29,21 @@ $Manager = "com.sakisu.sakisu"                        # SakiSU 管理器包名
 
 function SH([string]$cmd) { & $Adb shell $cmd 2>$null }
 function StepNo([int]$n, [string]$msg) { Write-Host "`n===== [$n/9] $msg =====" -ForegroundColor Cyan }
+
+# 带哈希校验的推送：adb push 在 USB 抖动/设备掉线窗口可能写入损坏内容
+# （实测出现过同长度乱码文件，sh 解析失败导致 loader 整个不执行），推送后
+# 必须回读 sha256 比对，不一致重试，两次仍失败则中止。
+function Push-Verified([string]$localPath, [string]$remotePath) {
+  $lh = (Get-FileHash $localPath -Algorithm SHA256).Hash.ToLower()
+  foreach ($try in 1..2) {
+    & $Adb push $localPath $remotePath | Out-Null
+    $rh = ((SH "sha256sum $remotePath") -split '\s+')[0]
+    if ("$rh".Trim() -eq "$lh") { return $true }
+    Write-Host "推送校验失败（第 $try 次，device=$("$rh".Trim()) repo=$("$lh".Substring(0,8))），重试..." -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
 $ansi = "$([char]27)\[[0-9;]*m"                      # exploit 日志的 ANSI 色码，回显时剥掉
 function Show-ExpLine([string]$line) { Write-Host ("  [exp] " + ($line -replace $ansi, "")) }
 
@@ -47,9 +62,10 @@ function Test-CleanBoot {
   # 干净 boot 判据：boot_id 为正常 UUID 且 enforce=1 且 KSU 未加载。
   # 注意第三项不可省：bootid 内核侧恢复后，成功提权过的 boot 的 boot_id 也
   # 读回原始 UUID，enforce 也可能被手动恢复为 1 —— 必须查 KSU 模块残留。
+  # 探测点用 /proc/modules：SakiSU 会隐藏 /sys/module/kernelsu（root 也看不见）。
   $bid = SH "cat /proc/sys/kernel/random/boot_id"
   $enf = SH "cat /sys/fs/selinux/enforce"
-  $ksu = SH "ls /sys/module/kernelsu"
+  $ksu = SH "grep -w kernelsu /proc/modules"
   $ksumsg = "absent"
   if ("$ksu".Trim()) { $ksumsg = "loaded" }
   Write-Host "boot_id = $bid ; enforce = $enf ; kernelsu = $ksumsg"
@@ -99,15 +115,21 @@ Write-Host "干净状态 ✓" -ForegroundColor Green
 
 # ---------- [2/9] 推送两阶段加载器 + exploit 版本校验 ----------
 StepNo 2 "推送 ksu_loader.sh（并校验设备端 exploit 版本）"
-& $Adb push (Join-Path $KsuDir "ksu_loader.sh") "$Tmp/rundir/ksu_loader.sh" | Out-Null
-SH "chmod 755 $Tmp/rundir/ksu_loader.sh; rm -f $Tmp/ksu_ready $Tmp/ksu_stage1.log $Tmp/ksu_stage2.log $Tmp/kallsyms.txt $Tmp/run_auto.log" | Out-Null
+if (-not (Push-Verified (Join-Path $KsuDir "ksu_loader.sh") "$Tmp/rundir/ksu_loader.sh")) {
+  Write-Host "ksu_loader.sh 推送校验两次失败 —— 检查 USB 连接后重跑。" -ForegroundColor Red
+  exit 2
+}
+SH "rm -f $Tmp/ksu_ready $Tmp/ksu_stage1.log $Tmp/ksu_stage2.log $Tmp/kallsyms.txt $Tmp/run_auto.log" | Out-Null
 # exploit 自动更新：设备端与仓库二进制 sha256 不一致（或缺失）时自动重推，
 # 避免旧版 exploit 残留在手机上被重复使用。
 $local = (Get-FileHash (Join-Path $Repo "exploit\bin\gl_mcast43") -Algorithm SHA256).Hash.ToLower()
 $remote = ((SH "sha256sum $Tmp/gl_mcast43") -split '\s+')[0]
 if ("$remote".Trim() -ne "$local") {
   Write-Host "设备端 exploit 与仓库版本不一致（device=$("$remote".Trim()) repo=$("$local".Substring(0,8))），自动推送更新..." -ForegroundColor Yellow
-  & $Adb push (Join-Path $Repo "exploit\bin\gl_mcast43") "$Tmp/gl_mcast43" | Out-Null
+  if (-not (Push-Verified (Join-Path $Repo "exploit\bin\gl_mcast43") "$Tmp/gl_mcast43")) {
+    Write-Host "exploit 推送校验两次失败 —— 检查 USB 连接后重跑。" -ForegroundColor Red
+    exit 2
+  }
   SH "chmod 755 $Tmp/gl_mcast43; mkdir -p $Tmp/rundir $Tmp/p5" | Out-Null
 } else {
   Write-Host "设备端 exploit 与仓库版本一致 ✓" -ForegroundColor Green
@@ -139,15 +161,22 @@ foreach ($attempt in 1..$MaxFires) {
   Write-Host "已发枪，实时日志（tail -f 常驻流）..."
   $done = $false
   $sr = $tail.StandardOutput
-  $deadline = [DateTime]::UtcNow.AddSeconds(180)
+  $deadline = [DateTime]::UtcNow.AddSeconds(300)   # KS 碰撞阶段可合法静默数分钟
+  # StreamReader 同时只允许一个未完成的读取操作：超时后必须继续 Wait 同一个
+  # task，绝不能重新 ReadLineAsync（否则抛 "stream is currently in use"）。
+  $task = $sr.ReadLineAsync()
+  $quiet = 0
   while ($true) {
-    $task = $sr.ReadLineAsync()
-    if (-not $task.Wait(15000)) {                 # 15 秒无新行
+    if (-not $task.Wait(15000)) {                 # 15 秒无新行（读取仍在挂起）
       if ($tail.HasExited) { break }              # 流断开 = 设备重启
       if ([DateTime]::UtcNow -gt $deadline) { break }
+      $quiet += 15
+      Write-Host ("  [exp] ... exploit 静默中（{0}s 无输出，流保持监听）" -f $quiet) -ForegroundColor DarkGray
       continue
     }
     $line = $task.Result
+    $task = $sr.ReadLineAsync()                   # 消费后再发起下一个读取
+    $quiet = 0
     if ($null -eq $line) { break }                # 流结束
     Show-ExpLine $line
     if ($line -match 'exploit chain complete') { $done = $true; break }
@@ -157,15 +186,20 @@ foreach ($attempt in 1..$MaxFires) {
   try { if (-not $tail.HasExited) { $tail.Kill() } } catch {}
   try { $tail.WaitForExit(3000) | Out-Null } catch {}
   if ($done) { $fired = $true; break }
-  # 失败路径：链路中止（设备存活）→ 重启重试；卡死重启 → 设备回来后重试
+  # 失败路径：链路中止（设备存活）→ 重启重试；卡死重启 → 设备回来后补看日志再重试
   $st = & $Adb get-state 2>$null
   if ("$st".Trim() -eq "device") {
-    Write-Host "发枪未完成（链路中止），重启回干净状态后重试..." -ForegroundColor Yellow
+    Write-Host "发枪未完成（链路中止），exploit 日志尾部：" -ForegroundColor Yellow
+    SH "tail -60 $Tmp/run_auto.log" | ForEach-Object { Show-ExpLine $_ }
+    Write-Host "重启回干净状态后重试..." -ForegroundColor Yellow
     & $Adb reboot
   } else {
     Write-Host "设备断开 —— 本轮发枪失败（设备已自行重启），等待重启完成后重试..." -ForegroundColor Yellow
   }
   if (-not (Wait-Boot)) { Write-Host "等待开机超时。" -ForegroundColor Red; exit 3 }
+  # /data 分区重启不丢：设备回来后补打崩溃前的发枪日志，失败原因不缺页
+  Write-Host "上轮发枪日志（崩溃前，来自 /data/local/tmp/run_auto.log）：" -ForegroundColor DarkGray
+  SH "tail -60 $Tmp/run_auto.log" | ForEach-Object { Show-ExpLine $_ }
 }
 if (-not $fired) { Write-Host "发枪 $MaxFires 次均失败，请抓 pstore 后人工排查。" -ForegroundColor Red; exit 3 }
 
@@ -197,7 +231,10 @@ Write-Host "ksu_final.ko 已生成 ✓" -ForegroundColor Green
 
 # ---------- [6/9] 推送并加载 KSU 模块 ----------
 StepNo 6 "触发 insmod 加载 SakiSU 内核模块"
-& $Adb push (Join-Path $KsuDir "ksu_final.ko") "$Tmp/p5/ksu_final.ko" | Out-Null
+if (-not (Push-Verified (Join-Path $KsuDir "ksu_final.ko") "$Tmp/p5/ksu_final.ko")) {
+  Write-Host "ksu_final.ko 推送校验两次失败 —— 检查 USB 连接后重跑。" -ForegroundColor Red
+  exit 6
+}
 SH "touch $Tmp/ksu_ready" | Out-Null
 $ins = $false
 foreach ($i in 1..10) {
@@ -243,7 +280,7 @@ SH "id"
 
 # ---------- [8/9] ashmem 修复 + 网络修复 ----------
 StepNo 8 "补建 ashmem 节点 + load_policy 修复网络"
-& $Adb push (Join-Path $PSScriptRoot "fix_ashmem.sh") "$Tmp/fix_ashmem.sh" | Out-Null
+Push-Verified (Join-Path $PSScriptRoot "fix_ashmem.sh") "$Tmp/fix_ashmem.sh" | Out-Null
 SH "sh $Tmp/fix_ashmem.sh"
 $net = SH "setenforce 0; echo 0 > /proc/sys/kernel/modules_disabled; setenforce 1; load_policy /sys/fs/selinux/policy; echo rc=`$?"
 Write-Host $net
