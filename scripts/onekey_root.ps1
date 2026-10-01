@@ -44,12 +44,17 @@ function Wait-Boot {
 }
 
 function Test-CleanBoot {
-  # 干净 boot 判据：boot_id 为正常 UUID 且 enforce=1
+  # 干净 boot 判据：boot_id 为正常 UUID 且 enforce=1 且 KSU 未加载。
+  # 注意第三项不可省：bootid 内核侧恢复后，成功提权过的 boot 的 boot_id 也
+  # 读回原始 UUID，enforce 也可能被手动恢复为 1 —— 必须查 KSU 模块残留。
   $bid = SH "cat /proc/sys/kernel/random/boot_id"
   $enf = SH "cat /sys/fs/selinux/enforce"
-  Write-Host "boot_id = $bid ; enforce = $enf"
+  $ksu = SH "ls /sys/module/kernelsu"
+  $ksumsg = "absent"
+  if ("$ksu".Trim()) { $ksumsg = "loaded" }
+  Write-Host "boot_id = $bid ; enforce = $enf ; kernelsu = $ksumsg"
   return ("$bid".Trim() -match '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -and
-          "$enf".Trim() -eq "1")
+          "$enf".Trim() -eq "1" -and -not "$ksu".Trim())
 }
 
 if (-not (Get-Command $Adb -ErrorAction SilentlyContinue) -and -not (Test-Path $Adb)) {
@@ -69,6 +74,13 @@ Write-Host "  （https://github.com/YUE546/IQOO-neo7-ghostlock-43499）" -Foregr
 Write-Host "  如果你通过付费渠道获得本工具，建议退款处理。" -ForegroundColor Yellow
 Write-Host "======================================================================" -ForegroundColor Yellow
 Write-Host ""
+try {
+  Write-Host "按任意键继续..." -ForegroundColor Gray -NoNewline
+  $null = [System.Console]::ReadKey($true)
+  Write-Host ""
+} catch {
+  Start-Sleep -Seconds 3     # 无交互控制台（如重定向运行）时跳过等待
+}
 
 # ---------- [1/9] 状态检查（脏 boot 自动重启） ----------
 StepNo 1 "确认手机干净状态"
@@ -79,16 +91,27 @@ while (-not (Test-CleanBoot)) {
     exit 2
   }
   $reboots++
-  Write-Host "状态不干净（boot_id 非 UUID 或 SELinux 未恢复），自动重启中（第 $reboots 次）..." -ForegroundColor Yellow
+  Write-Host "状态不干净（boot_id 非 UUID / SELinux 未恢复 / KSU 已加载——上轮成功残留），自动重启中（第 $reboots 次）..." -ForegroundColor Yellow
   & $Adb reboot
   if (-not (Wait-Boot)) { Write-Host "等待开机超时。" -ForegroundColor Red; exit 2 }
 }
 Write-Host "干净状态 ✓" -ForegroundColor Green
 
-# ---------- [2/9] 推送两阶段加载器 ----------
-StepNo 2 "推送 ksu_loader.sh"
+# ---------- [2/9] 推送两阶段加载器 + exploit 版本校验 ----------
+StepNo 2 "推送 ksu_loader.sh（并校验设备端 exploit 版本）"
 & $Adb push (Join-Path $KsuDir "ksu_loader.sh") "$Tmp/rundir/ksu_loader.sh" | Out-Null
 SH "chmod 755 $Tmp/rundir/ksu_loader.sh; rm -f $Tmp/ksu_ready $Tmp/ksu_stage1.log $Tmp/ksu_stage2.log $Tmp/kallsyms.txt $Tmp/run_auto.log" | Out-Null
+# exploit 自动更新：设备端与仓库二进制 sha256 不一致（或缺失）时自动重推，
+# 避免旧版 exploit 残留在手机上被重复使用。
+$local = (Get-FileHash (Join-Path $Repo "exploit\bin\gl_mcast43") -Algorithm SHA256).Hash.ToLower()
+$remote = ((SH "sha256sum $Tmp/gl_mcast43") -split '\s+')[0]
+if ("$remote".Trim() -ne "$local") {
+  Write-Host "设备端 exploit 与仓库版本不一致（device=$("$remote".Trim()) repo=$("$local".Substring(0,8))），自动推送更新..." -ForegroundColor Yellow
+  & $Adb push (Join-Path $Repo "exploit\bin\gl_mcast43") "$Tmp/gl_mcast43" | Out-Null
+  SH "chmod 755 $Tmp/gl_mcast43; mkdir -p $Tmp/rundir $Tmp/p5" | Out-Null
+} else {
+  Write-Host "设备端 exploit 与仓库版本一致 ✓" -ForegroundColor Green
+}
 
 # ---------- [3/9] 发枪（exploit，失败自动重启重试） ----------
 $fireCmd = "cd $Tmp && KSU_RUNDIR=$Tmp/rundir KSU_LOADER=1 FLIP_PERMISSIVE=1 " +
